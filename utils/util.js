@@ -4,17 +4,6 @@ import path from 'path'
 export const sleep = t => new Promise(resolve => setTimeout(resolve, t).unref?.())
 
 /**
- * @template T
- * @param {T[]} arr
- * @param {number} n
- */
-export function * chunks (arr, n) {
-    for (let i = 0; i < arr.length; i += n) {
-        yield arr.slice(i, i + n)
-    }
-}
-
-/**
  * @param {Date} episodeDate The date to compare and correct
  * @param {number} weeks The number of weeks past the episodeDate
  * @param {boolean} skip Add the specified number of weeks regardless of the episodeDate having past
@@ -32,6 +21,17 @@ export function past(episodeDate, weeks = 0, skip) {
  */
 export function dayTimeMatch(date1, date2) {
     return date1.getUTCDay() === date2.getUTCDay() && date1.getUTCHours() === date2.getUTCHours() && date1.getUTCMinutes() === date2.getUTCMinutes()
+}
+
+/**
+ * @param {string|Date} dateA
+ * @param {string|Date} dateB
+ * @returns {boolean} Whether the two dates fall on the same UTC day
+ */
+export function isSameUTCDay(dateA, dateB) {
+    const a = new Date(dateA)
+    const b = new Date(dateB)
+    return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate()
 }
 
 /**
@@ -220,11 +220,11 @@ export function crossesDSTBoundary(previousDate, currentDate) {
 
 /**
  * @param {Date} date1 The date to be compared to date2 (or today)
- * @param {Date} date2 The most recent date to be compared (leave empty for today's date).
+ * @param {Date} [date2=new Date()] The most recent date to be compared (leave empty for today's date).
  * @returns {number} The number of days difference between the specified date and today.
  */
-export function daysAgo(date1, date2) {
-    return Math.floor(((date2 || new Date()) - date1) / (1000 * 60 * 60 * 24));
+export function daysAgo(date1, date2 = new Date()) {
+    return Math.floor((date2 - date1) / (1000 * 60 * 60 * 24));
 }
 
 /**
@@ -265,6 +265,29 @@ function ensureDirectoryExists(filePath) {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true })
     }
+}
+
+/**
+ * Checks the fetched series count against the saved schedule to detect API degradation.
+ * Exits the process if the count drops below 40% of the saved schedule (critical),
+ * or returns a warning string if below 75% (warning). Returns null if all is well.
+ *
+ * @param {Array} lists The fetched timetable entries to validate.
+ * @param {Array} currentSchedule The saved schedule to compare against.
+ * @returns {string|null} A warning message, or null if the count is acceptable.
+ */
+export function checkThreshold(lists, currentSchedule) {
+    const criticalThreshold = Math.floor(currentSchedule.length * .40)
+    const warnThreshold = Math.floor(currentSchedule.length * .75)
+    if (currentSchedule.length > 0 && lists.length < criticalThreshold) {
+        console.error(`CRITICAL: Timetable fetch returned only ${lists.length} series but the saved schedule has ${currentSchedule.length} (min expected: ${criticalThreshold}). AniList or the AnimeSchedule API may be degraded. Aborting to prevent cascade data loss.`)
+        process.exit(1)
+    } else if (currentSchedule.length > 0 && lists.length < warnThreshold) {
+        const warning = `WARNING: Timetable fetch returned only ${lists.length} series but the saved schedule has ${currentSchedule.length} (expected at least ${warnThreshold}). AniList or the AnimeSchedule API may be partially degraded.`
+        console.error(warning)
+        return warning
+    }
+    return null
 }
 
 /**

@@ -1,14 +1,14 @@
 [
   {
-    "title": "Arisugawa Ren tte Honto wa Onna Nanda yo ne.",
-    "route": "arisugawa-ren-tte-honto-wa-onna-nanda-yo-ne",
-    "romaji": "Arisugawa Ren tte Honto wa Onna Nanda yo ne.",
-    "english": "Ren Arisugawa Is Actually a Girl",
-    "native": "有栖川煉ってホントは女なんだよね。",
+    "title": "Overflow",
+    "route": "overflow",
+    "romaji": "Overflow",
+    "english": "Overflow",
+    "native": "おーばーふろぉ",
     "delayedFrom": "0001-01-01T00:00:00Z",
     "delayedUntil": "0001-01-01T00:00:00Z",
     "status": "Ongoing",
-    "episodeDate": "2026-01-25T16:05:00Z",
+    "episodeDate": "2026-09-12T23:00:00Z",
     "episodeNumber": 4,
     "episodes": 8,
     "lengthMin": 7,
@@ -20,19 +20,78 @@
         "route": "ona"
       }
     ],
+    "websites": {
+      "aniList": "https://anilist.co/anime/113417",
+      "mal": "https://myanimelist.net/anime/40746"
+    },
     "airingStatus": "aired"
   },
   {
-    "title": "Ichigo Aika: Zatsu de Namaiki na Imouto to Warikirenai Ani",
-    "route": "ichigo-aika-zatsu-de-namaiki-na-imouto-to-warikirenai-ani",
-    "romaji": "Ichigo Aika: Zatsu de Namaiki na Imouto to Warikirenai Ani",
-    "english": "Ichigo Aika: Strawberry Elegy",
-    "native": "イチゴ哀歌～雑で生イキな妹と割り切れない兄～",
+    "title": "My Classmate's a Sexy Actress, and Now We Live Together?!",
+    "route": "onaji-semi-no-someya-san-ga-sexy-joyuu-datta-hanashi",
+    "romaji": "Onaji Semi no Someya-san ga Sexy Joyuu datta Hanashi.",
+    "english": "My Classmate's a Sexy Actress, and Now We Live Together?!",
+    "native": "同じゼミの染谷さんがセクシー女優だった話。",
     "delayedFrom": "0001-01-01T00:00:00Z",
     "delayedUntil": "0001-01-01T00:00:00Z",
     "status": "Ongoing",
-    "episodeDate": "2026-01-25T16:00:00Z",
-    "episodeNumber": 4,
+    "episodeDate": "2026-09-13T17:00:00Z",
+    "episodeNumber": 5,
+    "episodes": 8,
+    "lengthMin": 4,
+    "donghua": false,
+    "airType": "dub",
+    "mediaTypes": [
+      {
+        "name": "ONA",
+        "route": "ona"
+      }
+    ],
+    "websites": {
+      "aniList": "https://anilist.co/anime/208685",
+      "mal": "https://myanimelist.net/anime/63619"
+    },
+    "airingStatus": "aired"
+  },
+  {
+    "title": "What She Fell on Was the Tip of My Dick",
+    "route": "joshiochi-2-kai-kara-onnanoko-ga-futtekita",
+    "romaji": "Joshiochi! 2-kai kara Onnanoko ga... Futtekita!?",
+    "english": "What She Fell on Was the Tip of My Dick",
+    "native": "じょしおちっ！～2階から女の子が…降ってきた！？～",
+    "delayedFrom": "0001-01-01T00:00:00Z",
+    "delayedUntil": "0001-01-01T00:00:00Z",
+    "status": "Ongoing",
+    "episodeDate": "2026-09-12T07:00:00Z",
+    "episodeNumber": 6,
+    "episodes": 9,
+    "lengthMin": 5,
+    "donghua": false,
+    "airType": "dub",
+    "mediaTypes": [
+      {
+        "name": "ONA",
+        "route": "ona"
+      }
+    ],
+    "websites": {
+      "aniList": "https://anilist.co/anime/101981",
+      "mal": "https://myanimelist.net/anime/37281"
+    },
+    "airingStatus": "aired"
+  },
+  {
+    "title": "Secret Mission: Sennyuu Sousakan wa Zettai ni Makenai!",
+    "route": "secret-mission-sennyuu-sousakan-wa-zettai-ni-makenai",
+    "romaji": "Secret Mission: Sennyuu Sousakan wa Zettai ni Makenai!",
+    "english": "Secret Mission - Undercover Agents Never Back Down!",
+    "native": "しーくれっとみっしょん~潜入捜査官は絶対に負けない!~",
+    "delayedFrom": "0001-01-01T00:00:00Z",
+    "delayedUntil": "0001-01-01T00:00:00Z",
+    "status": "Ongoing",
+    "episodeDate": "2026-09-13T01:00:00Z",
+    "episodeNumber": 8,
+    "episodes": 8,
     "lengthMin": 7,
     "donghua": false,
     "airType": "dub",
@@ -42,6 +101,10 @@
         "route": "ona"
       }
     ],
+    "websites": {
+      "aniList": "https://anilist.co/anime/169728",
+      "mal": "https://myanimelist.net/anime/56497"
+    },
     "airingStatus": "aired"
   }
 ]

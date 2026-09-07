@@ -1,6 +1,6 @@
 // noinspection JSUnresolvedReference,NpmUsedModulesInstalled
 
-import { calculateWeeksToFetch, dayTimeMatch, isDSTTransitionMonth, getDSTStartEndDates, crossesDSTBoundary, delay, daysAgo, getCurrentDay, fixTime, getCurrentYearAndWeek, getWeeksInYear, loadJSON, past, saveJSON, weeksDifference, durationMap, mediaTypeMap, correctZeroEpisodes } from './utils/util.js'
+import { calculateWeeksToFetch, dayTimeMatch, isDSTTransitionMonth, getDSTStartEndDates, crossesDSTBoundary, delay, daysAgo, isSameUTCDay, getCurrentDay, fixTime, getCurrentYearAndWeek, getWeeksInYear, loadJSON, past, saveJSON, weeksDifference, durationMap, mediaTypeMap, correctZeroEpisodes, checkThreshold } from './utils/util.js'
 import path from 'path'
 
 // query animeschedule for the proper timetables //
@@ -58,11 +58,8 @@ export async function fetchDubSchedule() {
     const changes = []
 
     const { writeFile } = await import('node:fs/promises')
-    const { writable } =  await import('simple-store-svelte')
-    const { exactMatch, matchKeys } = await import('./utils/anime.js')
     const { anilistClient } = await import('./utils/anilist.js')
     const { malDubs } = await import('./utils/animedubs.js')
-    const { default: AnimeResolver } = await import('./utils/animeresolver.js')
 
     const BEARER_TOKEN = process.env.ANIMESCHEDULE_TOKEN
     if (!BEARER_TOKEN) {
@@ -72,7 +69,7 @@ export async function fetchDubSchedule() {
 
     // Fetch airing lists //
 
-    let airingLists = writable([])
+    let airingLists = []
     let updatedEpisodes = false
     const currentSchedule = loadJSON(path.join('./raw/dub-schedule.json'))
     const exactSchedule = structuredClone(currentSchedule)
@@ -87,8 +84,8 @@ export async function fetchDubSchedule() {
         console.log(`Fetching dub timetables for Year ${year}, Week ${week}...`)
         const fetchedData = await fetchAiringSchedule({type: 'timetables', year, week, token: BEARER_TOKEN})
         if (fetchedData) {
-            const newEntries = fetchedData.filter((item) => !airingLists.value.some((existing) => existing.route === item.route))
-            airingLists.update((lists) => [...lists, ...newEntries])
+            const newEntries = fetchedData.filter((item) => !airingLists.some((existing) => existing.route === item.route))
+            airingLists = [...airingLists, ...newEntries]
         }
         await delay(500)
 
@@ -125,9 +122,9 @@ export async function fetchDubSchedule() {
         console.log(`Changes detected in the custom dubs lists.... saved!`)
         saveJSON(path.join(`./custom/custom-dubs.json`), customDubs, true)
     }
-    airingLists.update((lists) => [...lists, ...customDubs])
+    airingLists = [...airingLists, ...customDubs]
 
-    let timetables = await airingLists.value
+    let timetables = airingLists
     if (timetables) {
         timetables = timetables.filter((entry) => {
             const delayedText = entry.delayedText?.toLowerCase()
@@ -154,6 +151,8 @@ export async function fetchDubSchedule() {
             }
             return true
         })
+        const timetablesWarning = checkThreshold(timetables, currentSchedule)
+        if (timetablesWarning) changes.push(timetablesWarning)
 
         for (const entry of currentSchedule) { // need to re-add indefinitely delayed series to timetables, or correctly remove un-verified episodes.
             const existingInAiring = timetables.findIndex((airingItem) => airingItem.route === entry.route)
@@ -205,22 +204,27 @@ export async function fetchDubSchedule() {
                 console.log(`The verified series ${entry.media?.media?.title?.userPreferred} is missing from the timetables, this is likely a mistake or a bug, series will be re-added with the assumption the schedule continues as-is.`)
                 timetables.push(entry)
             } else if ((existingInAiring !== -1) && (weeksDifference(timetables[existingInAiring].delayedFrom, past(new Date(), 0, true)) <= 4) && (new Date(timetables[existingInAiring].delayedFrom) > new Date(timetables[existingInAiring].delayedUntil))) { // highly likely this is an indefinitely delayed series.
-                if (!entry.delayedIndefinitely) {
-                    changes.push(`(Dub) The series ${entry.media?.media?.title?.userPreferred} Episode ${entry.episodeNumber} has been delayed indefinitely`)
-                    console.log(`The series ${entry.media?.media?.title?.userPreferred} is has a delayedFrom date specified but no delayedUntil date, this is likely an indefinite delay!`)
+                const isFuture = (daysAgo(new Date(timetables[existingInAiring].delayedFrom)) * -1) > 4
+                if (!entry.delayedIndefinitely || isFuture) {
+                    if (!isFuture) {
+                        changes.push(`(Dub) The series ${entry.media?.media?.title?.userPreferred} Episode ${entry.episodeNumber} has been delayed indefinitely`)
+                        console.log(`The series ${entry.media?.media?.title?.userPreferred} is has a delayedFrom date specified but no delayedUntil date, this is likely an indefinite delay!`)
+                    }
                     timetables[existingInAiring] = {
                         ...timetables[existingInAiring],
                         verified: true,
-                        delayedUntil: new Date(new Date().getFullYear() + 6, 0, 1).toISOString(),
-                        delayedIndefinitely: true
+                        ...(!isFuture ? { delayedUntil: new Date(new Date().getFullYear() + 6, 0, 1).toISOString() } : {}),
+                        ...(!isFuture ? { delayedIndefinitely: true } : {})
                     }
                 } else {
                     timetables[existingInAiring] = { ...entry }
                 }
             }
         }
-        airingLists.value = timetables.filter(item => !item.airType || item.airType === 'dub').sort((a, b) => a.title.localeCompare(b.title)) // Need to filter to ensure only dubs are fetched, the api sometimes includes raw airType...
-        console.log(`Successfully retrieved ${airingLists.value.length} airing series...`)
+        airingLists = timetables.filter(item => !item.airType || item.airType === 'dub').sort((a, b) => a.title.localeCompare(b.title)) // Need to filter to ensure only dubs are fetched, the api sometimes includes raw airType...
+        console.log(`Successfully retrieved ${airingLists.length} airing series...`)
+        const airingWarning = checkThreshold(airingLists, currentSchedule)
+        if (airingWarning) changes.push(airingWarning)
     } else {
         console.error('Error: Failed to fetch the dub airing schedule, it cannot be null!')
         process.exit(1)
@@ -231,113 +235,93 @@ export async function fetchDubSchedule() {
 
     // resolve airing lists //
 
-    const airing = await airingLists.value
+    const airing = airingLists
     const mediaID = /(?:https?:\/\/)?(?:www\.)?(?:myanimelist\.net\/anime\/|anilist\.co\/anime\/)(\d+)/
-    const titles = []
-    const order = []
+    const order = [] // { route, media }
 
-    airing.forEach((entry) => { // HACK: Stupid fixes for AniList breaking up series into multiple entries.
-        if (entry.route === 'kimetsu-no-yaiba-movie-mugen-jou-hen') { // Demon Slayer: Infinity Castle, this is broken up into three parts instead of nesting.
-            if (entry.episodeNumber === 1) entry.romaji = 'Kimetsu no Yaiba: Mugenjou-hen Movie 1 - Akaza Sairai'
-            else if (entry.episodeNumber === 2) entry.romaji = 'Kimetsu no Yaiba: Mugenjou-hen Movie 2'
-            else if (entry.episodeNumber === 3) entry.romaji = 'Kimetsu no Yaiba: Mugenjou-hen Movie 3'
+    // airing.forEach((entry) => { // HACK: Stupid fixes for AniList breaking up series into multiple entries.
+    //     if (entry.route === 'kimetsu-no-yaiba-movie-mugen-jou-hen') { // Demon Slayer: Infinity Castle, this is broken up into three parts instead of nesting.
+    //         if (entry.episodeNumber === 1) entry.romaji = 'Kimetsu no Yaiba: Mugenjou-hen Movie 1 - Akaza Sairai'
+    //         else if (entry.episodeNumber === 2) entry.romaji = 'Kimetsu no Yaiba: Mugenjou-hen Movie 2'
+    //         else if (entry.episodeNumber === 3) entry.romaji = 'Kimetsu no Yaiba: Mugenjou-hen Movie 3'
+    //     }
+    // })
+
+    // Build a map of already-resolved routes from the current schedule
+    const resolvedFromCache = new Map(currentSchedule.filter(entry => entry.route && entry.media?.media?.id).map(entry => [entry.route, entry.media.media]))
+
+    // Fetch schedule details only for routes we don't already have IDs for
+    const uncachedRoutes = airing.filter(entry => !resolvedFromCache.has(entry.route) && !entry.websites)
+    console.log(`Fetching schedule details for ${uncachedRoutes.length}/${airing.length} routes (${airing.length - uncachedRoutes.length} resolved from cache)`)
+    if (uncachedRoutes.length > 0) console.log(`Uncached routes: ${uncachedRoutes.map(entry => entry.route).join(', ')}`)
+
+    const scheduleDetails = await Promise.all(
+      airing.map(entry => {
+          if (entry.websites) {
+              return Promise.resolve({
+                  route: entry.route,
+                  websites: entry.websites,
+                  dubEpisodeOverride: { overrideDate: entry.overrideDate || null }
+              })
+          }
+          if (resolvedFromCache.has(entry.route)) {
+              const cached = resolvedFromCache.get(entry.route)
+              const stub = { route: entry.route, dubEpisodeOverride: { overrideDate: entry.overrideDate || null } }
+              if (cached.id) stub.websites = { aniList: `https://anilist.co/anime/${cached.id}` }
+              else if (cached.idMal) stub.websites = { mal: `https://myanimelist.net/anime/${cached.idMal}` }
+              return Promise.resolve(stub)
+          }
+          console.log(`Fetching schedule details for uncached route: ${entry.route}`)
+          return fetchAiringSchedule({ type: 'anime', route: entry.route, token: BEARER_TOKEN })
+      })
+    )
+
+    // Fetch schedule details (which include website links) for every route.
+    // const scheduleDetails = await Promise.all(airing.map(entry => fetchAiringSchedule({ type: 'anime', route: entry.route, token: BEARER_TOKEN })))
+
+    const aniListIds = []
+    const malIds = []
+    const idLookup = [] // { route, id, isAniList }
+
+    airing.forEach((entry, index) => {
+        const detail = scheduleDetails[index]
+        const url = detail?.websites?.aniList || detail?.websites?.mal
+        const match = url?.match(mediaID)
+        if (!match) {
+            changes.push(`No AniList/MAL URL found for ${entry.route}, cannot resolve, this is a BIG deal!!`)
+            console.log(`Failed to find an AniList/MAL URL for route ${entry.route}`)
+            return
         }
+        idLookup.push({ route: entry.route, id: match[1], isAniList: !!detail?.websites?.aniList })
+        if (!!detail?.websites?.aniList) aniListIds.push(Number(match[1]))
+        else malIds.push(Number(match[1]))
     })
 
-    // Resolve routes as titles
-    const parseObjs = await AnimeResolver.findAndCacheTitle(airing.map(item => item.romaji || item.route))
+    // Batch resolve every ID in as few requests as possible.
+    const [aniListResults, malResults] = await Promise.all([
+        aniListIds.length ? anilistClient.searchAllIDS({ id: aniListIds, perPage: aniListIds.length }) : null,
+        malIds.length ? anilistClient.searchAllIDS({ idMal: malIds, perPage: malIds.length }) : null
+    ])
 
-    for (const parseObj of parseObjs) {
-        const media = AnimeResolver.animeNameCache[AnimeResolver.getCacheKeyForTitle(parseObj)]
-        const threshold = parseObj?.anime_title?.length > 15 ? 0.2 : parseObj?.anime_title?.length > 9 ? 0.15 : 0.1 // play nice with small anime titles
-        const verification = !matchKeys(media, parseObj.anime_title, ['title.userPreferred', 'title.english', 'title.romaji'], threshold)
-        console.log(`Resolving route ${parseObj?.anime_title} as ${media?.title?.userPreferred} which is ${verification ? 'needs verification' : 'verified'}`)
-        let item
-
-        if (!media || verification) { // Resolve failed routes
-            console.log(`Failed to resolve, trying alternative title(s) for ${parseObj?.anime_title}`)
-            item = airing.find(i => exactMatch(i, parseObj?.anime_title, ['route', 'title', 'romaji', 'english', 'native'])) || airing.find(i => matchKeys(i, parseObj?.anime_title, ['route', 'title', 'romaji', 'english', 'native'], threshold))
-            const altTitles = [item.romaji, item.english, item.title, item.native].filter(Boolean)
-            const fallbackTitles = await AnimeResolver.findAndCacheTitle(altTitles)
-            let attempt = 0
-            for (const parseObjAlt of fallbackTitles) {
-                attempt++
-                const usedRoutes = new Set(order.map(o => o.route))
-                const mediaAlt = AnimeResolver.animeNameCache[AnimeResolver.getCacheKeyForTitle(parseObjAlt)]
-                const altVerification = !matchKeys(mediaAlt, parseObjAlt.anime_title, ['title.userPreferred', 'title.english', 'title.romaji', 'title.native'], threshold)
-                console.log(`Resolving ${parseObjAlt?.anime_title} as ${mediaAlt?.title?.userPreferred} which is ${altVerification ? 'needs verification' : 'verified'}`)
-                if (mediaAlt && !altVerification && !usedRoutes.has(item.route)) {
-                    titles.push(parseObjAlt.anime_title)
-                    order.push({route: item.route, title: mediaAlt.title.userPreferred})
-                    console.log(`Resolved alternative title ${parseObjAlt?.anime_title} as ${mediaAlt?.title?.userPreferred}`)
-                    break
-                } else if (attempt === altTitles.length && (!mediaAlt || altVerification)) { // anilist is sometimes just crap at resolving some titles as they use weird uni characters in the name or some titles just have a very similar name and anilist just doesn't check itself...
-                    console.log(`Failed to resolve alternatives title(s), trying to fetch database URL's directly for ${parseObj?.anime_title}`)
-                    let fallback = false
-                    const fallbackRoute = await fetchAiringSchedule({type: 'anime', route: item.route, token: BEARER_TOKEN})
-                    for (const url of [fallbackRoute?.websites?.aniList, fallbackRoute?.websites?.mal].filter(Boolean)) {
-                        if (!url || fallback) continue
-                        const match = url.match(mediaID)
-                        if (match) { // thank god there is at least one url...
-                            console.log(`Found ID ${match[1]} from URL ${url}, attempting to locate media for ${parseObj?.anime_title}`)
-                            const res = await anilistClient.searchIDS({...(url.toLowerCase().includes('anilist') ? { id: match[1] } : { idMal: match[1] })})
-                            const usedRoutes = new Set(order.map(o => o.route))
-                            const media = !usedRoutes.has(item.route) && res?.data?.Page?.media[0]
-                            if (media) { // yippie the impossible was made possible.
-                                AnimeResolver.cacheAnimeName(media.title.userPreferred, media)
-                                titles.push(media.title.userPreferred)
-                                order.push({route: item.route, title: media.title.userPreferred})
-                                console.log(`Resolved route ${parseObj?.anime_title} from URL ${url} as ${media?.title?.userPreferred}`)
-                                fallback = true
-                            }
-                        }
-                    }
-                    if (!fallback) { // well sucks to be you I guess...
-                        changes.push(`Failed to resolve alternative title(s) ${parseObj?.anime_title}, things will not work as expected, this is a BIG deal!!`)
-                        console.log(`Failed to resolve alternative title(s) ${parseObj?.anime_title}`)
-                    }
-                } else {
-                    console.log(`Failed to resolve alternative title ${parseObjAlt?.anime_title} for ${parseObj?.anime_title}`)
-                }
-            }
+    const resolvedMedia = [ ...(aniListResults?.data?.Page?.media || []), ...(malResults?.data?.Page?.media || []) ]
+    for (const { route, id, isAniList } of idLookup) {
+        const media = resolvedMedia.find(media => isAniList ? String(media.id) === String(id) : String(media.idMal) === String(id))
+        if (media) {
+            order.push({ route, media })
+            console.log(`Resolved route ${route} via ${isAniList ? 'AniList' : 'MAL'} ID ${id} as ${media.title.userPreferred}`)
         } else {
-            const usedRoutes = new Set(order.map(o => o.route))
-            item = airing.find(i => !usedRoutes.has(i.route) && exactMatch(i, parseObj?.anime_title, ['route', 'romaji', 'english', 'title', 'native'])) || airing.find(i => !usedRoutes.has(i.route) && matchKeys(i, parseObj?.anime_title, ['route', 'romaji', 'english', 'title', 'native'], threshold))
-            if (item) {
-                titles.push(parseObj.anime_title)
-                order.push({route: item.route, title: media.title.userPreferred})
-                console.log(`Resolved route ${item.route}: ${parseObj?.anime_title} as ${media?.title?.userPreferred}`)
-            } else { // anilist is sometimes just crap at resolving some titles as they use weird uni characters in the name or some titles just have a very similar name and anilist just doesn't check itself...
-                console.log(`Failed to resolve route ${parseObj?.anime_title}, trying to fetch database URL's directly`)
-                let fallback = false
-                const fallbackRoute = await fetchAiringSchedule({type: 'anime', route: item.route, token: BEARER_TOKEN})
-                for (const url of [fallbackRoute?.websites?.aniList, fallbackRoute?.websites?.mal].filter(Boolean)) {
-                    if (!url || fallback) continue
-                    const match = url.match(mediaID)
-                    if (match) { // thank god there is at least one url...
-                        console.log(`Found ID ${match[1]} from URL ${url}, attempting to locate media for ${parseObj?.anime_title}`)
-                        const res = await anilistClient.searchIDS({...(url.toLowerCase().includes('anilist') ? { id: match[1] } : { idMal: match[1] })})
-                        const usedRoutes = new Set(order.map(o => o.route))
-                        const media = !usedRoutes.has(item.route) && res?.data?.Page?.media[0]
-                        if (media) { // yippie the impossible was made possible.
-                            AnimeResolver.cacheAnimeName(media.title.userPreferred, media)
-                            titles.push(media.title.userPreferred)
-                            order.push({route: item.route, title: media.title.userPreferred})
-                            console.log(`Resolved route ${parseObj?.anime_title} from URL ${url} as ${media?.title?.userPreferred}`)
-                            fallback = true
-                        }
-                    }
-                }
-                if (!fallback) { // well sucks to be you I guess...
-                    changes.push(`Failed to resolve route ${parseObj?.anime_title}, things will not work as expected, this is a BIG deal!!`)
-                    console.log(`Failed to resolve route ${parseObj?.anime_title}`)
-                }
-            }
+            changes.push(`Failed to resolve route ${route} via ID ${id}, things will not work as expected, this is a BIG deal!!`)
+            console.log(`Failed to resolve route ${route} via ID ${id}`)
         }
     }
 
+    const scheduleDetailsMap = new Map(scheduleDetails.filter(Boolean).map(detail => [detail.route, detail]))
+
     // modify timetables entries for better functionality and fix any offset minutes.
     airing.forEach((entry) => {
+        const detail = scheduleDetailsMap.get(entry.route)
+        if (detail?.dubEpisodeOverride?.overrideDate) entry.overrideDate = detail.dubEpisodeOverride.overrideDate
+
         const episodeDate = new Date(entry.episodeDate)
         episodeDate.setMinutes(Math.floor((episodeDate.getMinutes() + 1) / 5) * 5, 0)
         entry.episodeDate = past(episodeDate, 0, true)
@@ -346,15 +330,10 @@ export async function fetchDubSchedule() {
         entry.unaired = ((entry.episodeNumber <= 1 || (entry.subtractedEpisodeNumber <= 1 && entry.episodeNumber > 1)) && Math.floor(new Date(entry.episodeDate).getTime()) > Math.floor(Date.now()))
     })
 
-    // Resolve found titles
-    const results = await AnimeResolver.resolveFileAnime(titles)
-
-    // Create combined results by mapping the resolved data to airingItems
+    // Create combined results by mapping the resolved media to airingItems
     let combinedResults = airing.map(({ donghua, status, airType, imageVersionRoute, streams, airingStatus, ...airingItem }) => {
         // Find the resolved media match for the current airing item
-        const entry = order.find(o => o.route === airingItem.route)
-        const cachedTitle = AnimeResolver.animeNameCache[order.find(o => o.route === airingItem.route)?.route]?.title?.userPreferred
-        const mediaMatch = results?.find(result => result.media?.title?.userPreferred === cachedTitle) || results?.find(result => result.media?.title?.userPreferred === entry?.title)
+        const resolved = order.find(o => o.route === airingItem.route)
         const numberOfEpisodes = airingItem.subtractedEpisodeNumber ? (airingItem.episodeNumber - airingItem.subtractedEpisodeNumber) : 1
         const predictedEpisode = airingItem.episodeNumber + ((numberOfEpisodes > 4) && (airingStatus === 'aired') && !airingItem.unaired ? 0 : ((new Date(airingItem.episodeDate) < new Date()) && (new Date(airingItem.delayedUntil) < new Date()) && (!airingItem.episodes || (airingItem.episodeNumber < airingItem.episodes)) ? ((airingItem.subtractedEpisodeNumber >= 1 && (airingItem.episodeNumber - airingItem.subtractedEpisodeNumber) > 1 ? (airingItem.episodeNumber - airingItem.subtractedEpisodeNumber) : 0) + 1) : 0))
         const range = (start, end) => Array.from({ length: end - start + 1 }, (_, i) => start + i)
@@ -362,10 +341,10 @@ export async function fetchDubSchedule() {
 
         return {
             ...airingItem, // Include all original airing list data
-            ...(mediaMatch && {
+            ...(resolved?.media && {
                 media: {
                     media: {
-                        ...stripRelations(mediaMatch.media),
+                        ...stripRelations(resolved.media),
                         airingSchedule: {
                             nodes: range(airingItem.subtractedEpisodeNumber || predictedEpisode, predictedEpisode).map((ep) => ({
                                 episode: ep,
@@ -413,9 +392,9 @@ export async function fetchDubSchedule() {
     })
 
     if (combinedResults) {
-        if (combinedResults.length !== airingLists.value.length) {
-            changes.push(`Something is wrong! There are ${combinedResults.length} dub titles resolved and there are ${airingLists.value.length} dub titles in the timetables, less than what is expected!`)
-            console.error(`Something is wrong! There are ${combinedResults.length} dub titles resolved and there are ${airingLists.value.length} dub titles in the timetables, less than what is expected!`)
+        if (combinedResults.length !== airingLists.length) {
+            changes.push(`Something is wrong! There are ${combinedResults.length} dub titles resolved and there are ${airingLists.length} dub titles in the timetables, less than what is expected!`)
+            console.error(`Something is wrong! There are ${combinedResults.length} dub titles resolved and there are ${airingLists.length} dub titles in the timetables, less than what is expected!`)
         }
         const existingDubbedFeed = loadJSON(path.join('./raw/dub-episode-feed.json'))
         combinedResults = await correctZeroEpisodes('Dub', combinedResults, exactSchedule, existingDubbedFeed, changes)
@@ -500,7 +479,10 @@ export async function updateDubFeed(optSchedule) {
     // Filter out any incorrect episodes (last released) based on corrected air dates in the schedule and update all related episodes airing date.
     schedule.forEach(entry => {
         existingFeed = existingFeed.filter(episode => {
-            const foundEpisode = (episode.id === entry.media?.media?.id) && (((entry.subtractedEpisodeNumber && (episode.episode.aired >= entry.subtractedEpisodeNumber) && episode.episode.aired <= entry.episodeNumber) || (episode.episode.aired === entry.episodeNumber)) && (new Date(episode.episode.airedAt) < new Date(entry.episodeDate)))
+            const foundEpisode = (episode.id === entry.media?.media?.id) &&
+              (episode.id !== 182205 || episode.episode.aired !== 11)  // TODO: Remove this later
+              && (((entry.subtractedEpisodeNumber && (episode.episode.aired >= entry.subtractedEpisodeNumber) && episode.episode.aired <= entry.episodeNumber) || (episode.episode.aired === entry.episodeNumber)) && (new Date(episode.episode.airedAt) < new Date(entry.episodeDate)))
+            if (foundEpisode && isSameUTCDay(episode.episode.airedAt, entry.episodeDate)) return true // same day and it has already aired, keep it and modify the time later.
             if (foundEpisode) {
                 changes.push(`(Dub) Removed Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred} due to a correction in the airing date`)
                 console.log(`Removed Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred} from the Dubbed Episode Feed due to a correction in the airing date.`)
@@ -510,23 +492,42 @@ export async function updateDubFeed(optSchedule) {
         })
     })
 
+    // Fix episodes incorrectly dated to the current episodes air date due to a short delay, bumping them back a week if the prior week slot is unoccupied.
+    schedule.forEach(entry => {
+        if (entry.subtractedEpisodeNumber) return
+        existingFeed = existingFeed.map(episode => {
+            const foundEpisode = (episode.id === entry.media?.media?.id) && (episode.episode.aired === entry.episodeNumber - 1) && (episode.episode.airedAt === entry.episodeDate) && !existingFeed.some(ep => ep.id === entry.media?.media?.id && ep.episode.aired === entry.episodeNumber - 2 && ep.episode.airedAt === past(new Date(entry.episodeDate), -1, true))
+            if (foundEpisode) {
+                const prevDate = episode.episode.airedAt
+                episode.episode.airedAt = past(new Date(episode.episode.airedAt), -1, true)
+                changes.push(`(Dub) Modified Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred} from ${prevDate} to ${episode.episode.airedAt} (short delay caused date collision with Episode ${entry.episodeNumber})`)
+                console.log(`Modified Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred}, shared airedAt with Episode ${entry.episodeNumber}, bumped back one week to ${episode.episode.airedAt}`)
+                modifiedEpisodes.push(episode)
+            }
+            return episode
+        })
+    })
+
     const { dstStart, dstEnd } = getDSTStartEndDates()
     // Filter out incorrect episodes and correct dates if necessary
     schedule.forEach(entry => {
         const latestEpisodeInFeed = existingFeed.filter(episode => episode.id === entry.media?.media?.id).sort((a, b) => b.episode.aired - a.episode.aired)[0]
-        if (latestEpisodeInFeed && !dayTimeMatch(new Date(latestEpisodeInFeed.episode.airedAt), new Date(entry.episodeDate)) && (!entry.subtractedEpisodeNumber || (entry.subtractedEpisodeNumber > 1 && !((entry.episodeNumber - entry.subtractedEpisodeNumber) >= 6)))) {
+        if (latestEpisodeInFeed && !dayTimeMatch(new Date(latestEpisodeInFeed.episode.airedAt), new Date(entry.episodeDate)) && !(existingFeed.filter(episode => episode.id === entry.media?.media?.id && isSameUTCDay(episode.episode.airedAt, latestEpisodeInFeed.episode.airedAt)).length > 1 && weeksDifference(latestEpisodeInFeed.episode.airedAt, entry.episodeDate) >= 1) && (!entry.subtractedEpisodeNumber || (entry.subtractedEpisodeNumber > 1 && !((entry.episodeNumber - entry.subtractedEpisodeNumber) >= 6)))) {
             let mediaEpisodes = existingFeed.filter(episode => episode.id === entry.media.media.id)
-            mediaEpisodes.sort((a, b) => b.episode.aired - a.episode.aired)  // Sort by episode number in descending order
+            mediaEpisodes.sort((a, b) => b.episode.aired - a.episode.aired) // Sort by episode number in descending order
             const isInDSTTransition = isDSTTransitionMonth()
-            if (((entry.episodeNumber < 4 && !isInDSTTransition) || (!isInDSTTransition && daysAgo(new Date(latestEpisodeInFeed.episode.airedAt), new Date(entry.episodeDate)) <= 8)) && ((entry.delayedFrom !== entry.episodeDate && entry.delayedUntil !== entry.episodeDate && daysAgo(new Date(latestEpisodeInFeed.episode.airedAt), new Date(entry.episodeDate)) < 120) || daysAgo(new Date(latestEpisodeInFeed.episode.airedAt), new Date(entry.delayedFrom)) >= 7)) {
+            const isSameDayOverride = entry.overrideDate && entry.episodeNumber > 1 && !entry.subtractedEpisodeNumber && daysAgo(new Date(entry.overrideDate), new Date(entry.episodeDate)) < 1
+            if (((entry.episodeNumber < 4 && !isInDSTTransition) || (!isInDSTTransition && daysAgo(new Date(latestEpisodeInFeed.episode.airedAt), new Date(entry.episodeDate)) <= 8)) && ((entry.delayedFrom !== entry.episodeDate && entry.delayedUntil !== entry.episodeDate && (latestEpisodeInFeed.episode.aired > 1 || daysAgo(new Date(latestEpisodeInFeed.episode.airedAt), new Date(entry.episodeDate)) > 5) && daysAgo(new Date(latestEpisodeInFeed.episode.airedAt), new Date(entry.episodeDate)) < 120) || daysAgo(new Date(latestEpisodeInFeed.episode.airedAt), new Date(entry.delayedFrom)) >= 7)) {
                 console.log(`Modifying existing episodes of ${entry.media.media.title.userPreferred} from the Dubbed Episode Feed due to a correction in the airing date`)
                 const originalAiredAt = mediaEpisodes.map(episode => episode.episode.airedAt)
                 let ignoreCorrection = false
                 let correctedDate = -1
                 let usePredict = false
+                let ignored = true
                 let zeroIndexDate
                 mediaEpisodes.forEach((episode, index) => {
                     const prevDate = episode.episode.airedAt
+                    if (isSameDayOverride && index !== 0) return
                     if (ignoreCorrection || isDSTTransitionMonth(prevDate) || crossesDSTBoundary(prevDate, originalAiredAt[index - 1])) {
                         ignoreCorrection = true
                         return
@@ -537,11 +538,22 @@ export async function updateDubFeed(optSchedule) {
                         zeroIndexDate = episode.episode.aired === entry.episodeNumber || (entry.subtractedEpisodeNumber && (episode.episode.aired >= entry.subtractedEpisodeNumber)) ? new Date(entry.episodeDate) : weeksDifference(entry.delayedFrom, past(new Date(), 0, true)) <= 1 ? new Date(entry.delayedFrom) : predictDate
                         usePredict = past(new Date(predictDate), 0, true) === past(new Date(zeroIndexDate), 0, true)
                     }
-                    episode.episode.airedAt = past(new Date(zeroIndexDate), (!usePredict || index !== 0 ? correctedDate : 0), true)
-                    changes.push(`(Dub) Modified Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred} from ${prevDate} to ${episode.episode.airedAt}`)
-                    console.log(`Modified Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred} from the Dubbed Episode Feed with aired date from ${prevDate} to ${episode.episode.airedAt}`)
-                    modifiedEpisodes.push(episode)
+                    const newAiredAt = past(new Date(zeroIndexDate), (!usePredict || index !== 0 ? correctedDate : 0), true)
+
+                    // Prevents cascading time corrections when only the latest episode has changed and is only a time adjustment.
+                    if (index !== 0) {
+                        const diffHours = Math.abs(new Date(newAiredAt).getTime() - new Date(prevDate).getTime()) / (1000 * 60 * 60)
+                        if (diffHours > 0 && diffHours <= 2) return
+                    }
+                    if (episode.episode.airedAt !== newAiredAt) {
+                        episode.episode.airedAt = newAiredAt
+                        changes.push(`(Dub) Modified Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred} from ${prevDate} to ${episode.episode.airedAt}`)
+                        console.log(`Modified Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred} from the Dubbed Episode Feed with aired date from ${prevDate} to ${episode.episode.airedAt}`)
+                        modifiedEpisodes.push(episode)
+                        ignored = false
+                    }
                 })
+                if (ignored) console.log(`Skipped modifying existing episodes of ${entry.media.media.title.userPreferred} from the Dubbed Episode Feed... nothing has changed.`)
             } else if (isInDSTTransition) { // dst is active, and likely it was recent... only adjust the latest episode SINCE DST was active.
                 const latestEpisode = mediaEpisodes[0]
                 if (latestEpisode) {
@@ -568,22 +580,32 @@ export async function updateDubFeed(optSchedule) {
         let episodeType = 0
         if ((entry.unaired && new Date(entry.episodeDate) > new Date()) || (((new Date(entry.delayedUntil) > new Date()) || (new Date(entry.episodeDate) > new Date())) && entry.subtractedEpisodeNumber && (lastFeedEpisode === (entry.subtractedEpisodeNumber - 1)))) return newEpisodes
         for (let episodeNum = Math.max(lastFeedEpisode + 1, minEpisode); episodeNum < latestEpisode; episodeNum++) {
-            let baseEpisode = existingEpisodes.find(ep => ep.episode.aired <= episodeNum) || existingEpisodes.find(ep => ep.episode.aired === lastFeedEpisode)
-            const previousWeek = (await fetchPreviousWeek()).find((airingItem) => airingItem.route === entry.route)
+            let baseEpisode = existingEpisodes.reduce((best, ep) => (ep.episode.aired <= episodeNum && (!best || ep.episode.aired > best.episode.aired)) ? ep : best, null) || existingEpisodes.find(ep => ep.episode.aired === lastFeedEpisode)
+            const previousWeek = !entry.subtractedEpisodeNumber && (await fetchPreviousWeek()).find((airingItem) => airingItem.route === entry.route)
             const multiHeader =  entry.subtractedEpisodeNumber || (previousWeek && previousWeek.subtractedEpisodeNumber)  //|| (previousWeek && ((previousWeek.episodeNumber !== lastFeedEpisode) || (previousWeek.episodeNumber !== (entry.episodeNumber - 2)))) -- probably don't need this since these cases should never happen.
             episodeType = multiHeader && baseEpisode && (lastFeedEpisode + 1 !== entry.subtractedEpisodeNumber) ? 2 : multiHeader ? 1 : 0
             if (!baseEpisode && latestEpisode > episodeNum) { // fix for when no episodes in the feed but episode(s) have already aired
-                let weeksAgo = -1
-                let pastDate = past(new Date(entry.episodeDate), weeksAgo, true)
-                while (new Date(pastDate) >= new Date()) {
-                    weeksAgo--
-                    pastDate = past(new Date(entry.episodeDate), weeksAgo, true)
-                }
-                baseEpisode = {
-                    episode: {
-                        aired: episodeNum,
-                        airedAt: pastDate,
-                        addedAt: past(new Date(), 0, true)
+                if (multiHeader) {
+                    baseEpisode = {
+                        episode: {
+                            aired: episodeNum,
+                            airedAt: entry.episodeDate,
+                            addedAt: past(new Date(), 0, true)
+                        }
+                    }
+                } else {
+                    let weeksAgo = -1
+                    let pastDate = past(new Date(entry.episodeDate), weeksAgo, true)
+                    while (new Date(pastDate) >= new Date()) {
+                        weeksAgo--
+                        pastDate = past(new Date(entry.episodeDate), weeksAgo, true)
+                    }
+                    baseEpisode = {
+                        episode: {
+                            aired: episodeNum,
+                            airedAt: pastDate,
+                            addedAt: past(new Date(), 0, true)
+                        }
                     }
                 }
             }
@@ -631,6 +653,22 @@ export async function updateDubFeed(optSchedule) {
     }))).flat().filter(({ id, episode }) => {
         return !existingFeed.some(media => media.id === id && media.episode.aired === episode.aired)
     }).sort((a, b) => b.episode.aired - a.episode.aired)
+
+    // Fix same-day episodes whose time doesn't match the schedule entry corrected time.
+    schedule.forEach(entry => {
+        existingFeed = existingFeed.map(episode => {
+            if (episode.id === entry.media?.media?.id && isSameUTCDay(episode.episode.airedAt, entry.episodeDate) && episode.episode.airedAt !== entry.episodeDate) {
+                const prevDate = episode.episode.airedAt
+                episode.episode.airedAt = fixTime(new Date(prevDate), new Date(entry.episodeDate), true)
+                if (episode.episode.airedAt !== prevDate) {
+                    changes.push(`(Dub) Modified Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred} from ${prevDate} to ${episode.episode.airedAt} (same-day time correction)`)
+                    console.log(`Modified Episode ${episode.episode.aired} of ${entry.media.media.title.userPreferred} same-day time from ${prevDate} to ${episode.episode.airedAt}`)
+                    modifiedEpisodes.push(episode)
+                }
+            }
+            return episode
+        })
+    })
 
     const newFeed = Object.values([...newEpisodes.filter(({ id, episode }) => !existingFeed.some(media => media.id === id && media.episode.aired === episode.aired)), ...existingFeed].reduce((acc, item) => { acc[`${item.id}_${item.episode.airedAt}`] = acc[`${item.id}_${item.episode.airedAt}`] || []; acc[`${item.id}_${item.episode.airedAt}`].push(item); return acc }, {})).map(group => group.sort((a, b) => b.episode.aired - a.episode.aired)).flat().sort((a, b) => new Date(b.episode.airedAt) - new Date(a.episode.airedAt))
     if (JSON.stringify(newFeed) !== JSON.stringify(exactFeed || {})) { // helps prevent rebase conflicts
